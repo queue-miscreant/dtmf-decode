@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 '''
 DTMF Decoder
 
@@ -24,37 +25,7 @@ DTMF_DATA = [
 	, ['*', '0', '#', 'D']
 ]
 
-def _decode_detected_peaks(peaks, skip):
-	'''
-	Helper function for decode_detected_peaks. Does the actual decoding work.
-
-	@param peaks: Peak ranges/maxfilter pairs, from detect_frequency_peaks
-	@param skips: Array of frequency indices to skip over
-
-	@return: Pairs of a DTMF symbol and range of sample numbers it occurs at
-	'''
-	ret = []
-
-	for i in range(4):
-		if i in skip:
-			continue
-		for j in range(4):
-			if j+4 in skip:
-				continue
-			low_freq = peaks[i][0]
-			high_freq = peaks[j+4][0]
-
-			#iterate over all peaks of high/low pairs
-			for low_min, low_max in low_freq:
-				for high_min, high_max in high_freq:
-					overlap = range(max(low_min, high_min)
-						, min(high_max, low_max)+1)
-					if overlap:
-						ret.append((DTMF_DATA[i][j], overlap))
-
-	return ret
-
-def decode_detected_peaks(peaks, ignore_nat=1):
+def decode_detected_peaks(peaks, ignore_nat=2):
 	'''
 	Decode the output of `detect_frequency_peaks` into DTMF data.
 
@@ -63,19 +34,34 @@ def decode_detected_peaks(peaks, ignore_nat=1):
 	@param ignore_nat: If a peak's height is this many nats below the largest
 		peak's height, the corresponding frequency's is ignored
 
-	@return: Pairs of a DTMF symbol and range of sample numbers it occurs at
+	@return: Triples of a DTMF symbol, range of sample numbers it occurs at,
+		and the power ratio in nats by which the peaks differ
 	'''
-	skip = []
-	largest_filter = max(i[1].max() for i in peaks)
+	ret = []
 
-	for i, (_, maximum) in enumerate(peaks):
-		#if the peaks weren't high enough compared to other filters, ignore detected peaks
-		if np.log(largest_filter/maximum.max()) > ignore_nat:
-			skip.append(i)
-			continue
+	for i in range(4):
+		low_freq, low_sig = peaks[i]
+		#iterate over all peaks of high/low pairs
+		for low_begin, low_end in low_freq:
+			low_max = low_sig[low_begin:low_end].max()
+			for j in range(4):
+				high_freq, high_sig = peaks[j+4]
+				found = False
+				for k, (high_begin, high_end) in enumerate(high_freq):
+					high_max = high_sig[high_begin:high_end].max()
+					#find overlapping region
+					overlap = range(max(low_begin, high_begin)
+						, min(high_end, low_end)+1)
+					natspower = abs(np.log(high_max/low_max))
+					if overlap and natspower < ignore_nat:
+						ret.append((DTMF_DATA[i][j], overlap, natspower))
+						found = True
+						high_freq.pop(k)
+						break
+				if found:
+					break
 
-	return _decode_detected_peaks(peaks, skip)
-
+	return ret
 
 def get_peak_ranges(sig, max_frac, minlength):
 	'''
@@ -137,7 +123,7 @@ def detect_frequency_peaks(sig, frequency, sequence_length=.125, minheight=1.5):
 
 def decode_dtmf(sig, plot_out=False, plot_freqs=False):
 	'''
-	Decode DTMF data in a WAV file
+	Decode DTMF data from a signal
 
 	@param sig: A 2-tuple of a sample rate and a signal, like the return value
 		of wavfile.read
@@ -189,7 +175,7 @@ def decode_dtmf(sig, plot_out=False, plot_freqs=False):
 def _main():
 	import sys
 	from scipy.io import wavfile
-	if len(sys.argv) < 2:
+	if len(sys.argv) < 2 or "--help" in sys.argv:
 		print(__doc__)
 		return
 
